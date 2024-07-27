@@ -1,56 +1,68 @@
-#include "ReShade.fxh"
+//Greyscale rendering shader, created by George Kristiansen 
 
-float curve( float x, float k )
+//////////////////// 
+//Global variables// 
+//////////////////// 
+
+float4x4 World; 
+float4x4 WorldViewProjection; 
+float LightPower; 
+float LightAmbient; 
+float3 LightDir; 
+Texture xTexture; 
+
+////////////////// 
+//Sampler states// 
+////////////////// 
+sampler TextureSampler = sampler_state 
+{ 
+    texture = ; 
+    magfilter = LINEAR; 
+    minfilter = LINEAR; 
+    mipfilter = LINEAR; 
+    AddressU = Wrap; 
+    AddressV = Wrap; 
+}; 
+
+////////////////// 
+//I/O structures// 
+////////////////// 
+
+struct PixelColourOut { float4 Colour : COLOR0; }; 
+struct SceneVertexToPixel { 
+    float4 Position : POSITION; 
+    float2 TexCoords : TEXCOORD0; 
+    float3 Normal : TEXCOORD1; 
+    float4 Position3D : TEXCOORD2; 
+}; 
+
+/////////////////////////////////////////////////////////////////////// 
+//TECHNIQUE 1: Shaders for drawing an object using greyscale lighting// 
+/////////////////////////////////////////////////////////////////////// 
+
+SceneVertexToPixel GreyscaleVertexShader(float4 inPos : POSITION, float2 inTexCoords : TEXCOORD0, float3 inNormal : NORMAL) 
 {
-float s = sign( x - 0.5f );
-float o = ( 1.0f + s ) / 2.0f;
-return o - 0.5f * s * pow( max( 2.0f * ( o - s * x ), 0.0f ), k );
-}
+    SceneVertexToPixel Output = (SceneVertexToPixel)0; 
+    Output.Position = mul(inPos, WorldViewProjection); 
+    Output.Normal = normalize(mul(inNormal, (float3x3)World)); 
+    Output.Position3D = mul(inPos, World); 
+    Output.TexCoords = inTexCoords; return Output; 
+} 
 
-float3 makeBW( float3 col, float r, float y, float g, float c, float b, float m )
-{
-float3 hsl         = RGBToHSL( col.xyz );
-// Inverse of luma channel to no apply boosts to intensity on already intense brightness (and blow out easily)
-float lum          = 1.0f - hsl.z;
+PixelColourOut GreyscalePixelShader(SceneVertexToPixel PSIn) 
+{ 
+    PixelColourOut Output = (PixelColourOut)0; 
+    float4 baseColour = tex2D(TextureSampler, PSIn.TexCoords); 
+    float diffuseLightingFactor = saturate(dot(-normalize(LightDir), PSIn.Normal))*LightPower; float4 trueColour = baseColour*(diffuseLightingFactor + LightAmbient); 
+    float greyscaleAverage = (trueColour.r + trueColour.g + trueColour.b)/3.0f; 
+    Output.Colour = float4(greyscaleAverage, greyscaleAverage, greyscaleAverage, trueColour.a); 
+    return Output; 
+} 
 
-// Calculate the individual weights per color component in RGB and CMY
-// Sum of all the weights for a given hue is 1.0
-float weight_r     = curve( max( 1.0f - abs(  hsl.x               * 6.0f ), 0.0f ), curve_str ) +
-                     curve( max( 1.0f - abs(( hsl.x - 1.0f      ) * 6.0f ), 0.0f ), curve_str );
-float weight_y     = curve( max( 1.0f - abs(( hsl.x - 0.166667f ) * 6.0f ), 0.0f ), curve_str );
-float weight_g     = curve( max( 1.0f - abs(( hsl.x - 0.333333f ) * 6.0f ), 0.0f ), curve_str );
-float weight_c     = curve( max( 1.0f - abs(( hsl.x - 0.5f      ) * 6.0f ), 0.0f ), curve_str );
-float weight_b     = curve( max( 1.0f - abs(( hsl.x - 0.666667f ) * 6.0f ), 0.0f ), curve_str );
-float weight_m     = curve( max( 1.0f - abs(( hsl.x - 0.833333f ) * 6.0f ), 0.0f ), curve_str );
-
-// No saturation (greyscale) should not influence B&W image
-float sat          = hsl.y * ( 1.0f - hsl.y ) + hsl.y;
-float ret          = hsl.z;
-ret                += ( hsl.z * ( weight_r * r ) * sat * lum );
-ret                += ( hsl.z * ( weight_y * y ) * sat * lum );
-ret                += ( hsl.z * ( weight_g * g ) * sat * lum );
-ret                += ( hsl.z * ( weight_c * c ) * sat * lum );
-ret                += ( hsl.z * ( weight_b * b ) * sat * lum );
-ret                += ( hsl.z * ( weight_m * m ) * sat * lum );
-
-return saturate( ret );
-}
-
-float4 blackwhite(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
-{
-float4 color      = tex2D( ReShade::BackBuffer, texcoord );
-color.xyz         = saturate( color.xyz );
-
-// Do the Black & White
-color.xyz         = makeBW( color.xyz, red, yellow, green, cyan, blue, magenta );
-
-if( show_clip )
-{
-    float h       = 0.98f;
-    float l       = 0.01f;
-    color.xyz     = min( min( color.x, color.y ), color.z ) >= h ? lerp( color.xyz, float3( 1.0f, 0.0f, 0.0f ), smoothstep( h, 1.0f, min( min( color.x, color.y ), color.z ))) : color.xyz;
-    color.xyz     = max( max( color.x, color.y ), color.z ) <= l ? lerp( float3( 0.0f, 0.0f, 1.0f ), color.xyz, smoothstep( 0.0f, l, max( max( color.x, color.y ), color.z ))) : color.xyz;
-}
-color.xyz         = saturate( color.xyz + dnoise.xyz );
-return float4( color.xyz, 1.0f );
-}
+technique GreyscaleObject 
+{ 
+    pass pass0 { 
+        VertexShader = compile vs_2_0 GreyscaleVertexShader(); 
+        PixelShader = compile ps_2_0 GreyscalePixelShader(); 
+    } 
+} 
